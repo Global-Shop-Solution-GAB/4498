@@ -1,0 +1,95 @@
+Program.Sub.Preflight.Start
+Program.Sub.Preflight.End
+
+Program.Sub.Main.Start
+'BN, Jan 2019
+'This project will export balanced hours from report 001837 - Labor Performance Summary to an excel format and add the SAP Employee number then to be imported to SAP.
+'The csv file column will be: GSSEmp#,SAPEmp#, Date, Total Hours where the SAPEmp# is the user field 3 of employee master in Global Shop.
+'The program will be attached to hook 16100 (Post Crystal Report hook). If the Crystal Report is the Labor Performance Report (ID 001823), the program processing will be fired to capture the same data of that report from V_LASER_LABOR_PERF
+f.Intrinsic.Control.Try
+	v.Local.sError.Declare
+	
+	'Post process of Crystal Report hook
+	f.Intrinsic.Control.If(v.Caller.Hook,=,16100,and,V.Passed.009001,=,"001823")
+		F.ODBC.Connection!conx.OpenCompanyConnection
+		f.Intrinsic.Control.CallSub("ExportData")
+		F.ODBC.Connection!conx.close
+	f.Intrinsic.Control.EndIf	
+
+F.Intrinsic.Control.Catch
+	F.Intrinsic.String.Build("Project: {0}{1}Subroutine: {2}{1}Error Occurred {3} with description {4}{1}GAB Version: {5}}",V.Ambient.ScriptPath,V.Ambient.Newline,V.Ambient.CurrentSubroutine,V.Ambient.ErrorNumber,V.Ambient.ErrorDescription,V.Ambient.GABVersion,V.Local.sError)
+	F.Intrinsic.UI.Msgbox(V.Local.sError)
+	f.Intrinsic.Control.CallSub("Unload")
+F.Intrinsic.Control.EndTry
+Program.Sub.Main.End
+
+Program.Sub.UnLoad.Start
+f.Intrinsic.Control.Try
+	v.Local.sError.Declare
+
+	F.Intrinsic.Control.If(V.ODBC.conx.State,=,1)
+		F.ODBC.Connection!conx.close
+	F.Intrinsic.Control.EndIf
+	
+	f.Intrinsic.Control.End
+
+F.Intrinsic.Control.Catch
+	Function.Intrinsic.String.Build("Subroutine Error {0}{0}Subroutine: {1}{0}Error Occurred {2} with description {3}",V.Ambient.Newline,V.Ambient.CurrentSubroutine,V.Ambient.ErrorNumber,V.Ambient.ErrorDescription,V.Local.sError)
+	F.Intrinsic.UI.Msgbox(V.Local.sError)
+	F.Intrinsic.Control.End	
+F.Intrinsic.Control.EndTry
+Program.Sub.UnLoad.End
+
+Program.Sub.ExportData.Start
+f.Intrinsic.Control.Try
+	v.Local.sError.Declare
+	v.Local.sSQL.Declare
+	v.Local.sContent.Declare
+	v.Local.sFile.Declare
+	v.Local.iCnt.Declare
+	v.Local.sDate.Declare
+	V.Local.sTime.Declare
+	v.Local.sDateRange.Declare
+	v.Local.sRet.Declare
+	v.Local.sUser.Declare
+	v.Local.sUser.Set(v.Caller.User)
+	
+	'SAP Employee number Dictionary
+	f.Data.Dictionary.CreateFromSQL("SAPDict","conx","Select ltrim(rtrim(Employee)),ltrim(rtrim(Comments_3)) from Employee_MSTR")
+	f.Data.Dictionary.SetDefaultReturn("SAPDict","")
+	
+	'Get Employee, Time
+	f.Intrinsic.String.Build("Select ltrim(rtrim(Work_Order)) as GSSEmployeeNum,Tot_Hrs,BILBR_DATE,'' as SAPEmployeeNum,report_head_3 from V_LASER_LABOR_PERF where trmnl = '{0}' and RPTID = '001823' and descr = '(Hours In Decimal)' and Rec_Type <> 'G'",v.Caller.Terminal,v.Local.sSQL)
+	f.Data.DataTable.CreateFromSQL("E","conx",v.Local.sSQL,True)
+	f.Data.DataTable.FillFromDictionary("E","SAPDict","GSSEmployeeNum","SAPEmployeeNum")	
+	f.Data.Dictionary.Close("SAPDict")
+	
+	f.Intrinsic.Control.If(v.DataTable.E.RowCount,>,0)
+		'Build Content
+		v.Local.sContent.Set("GSSEmp#,SAPEmp#,DATE,HOURS")
+		f.Intrinsic.Control.For(v.Local.iCnt,0,v.DataTable.E.RowCount--,1)
+			f.Intrinsic.String.Format(v.DataTable.E(v.Local.iCnt).BILBR_DATE!FieldValString,"MM/DD/YYYY",v.Local.sDate)
+			f.Intrinsic.String.Build("{0}{1}{2},{3},{4},{5}",v.Local.sContent,v.Ambient.NewLine,v.DataTable.E(v.Local.iCnt).GSSEmployeeNum!FieldValTrim,v.DataTable.E(v.Local.iCnt).SAPEmployeeNum!FieldValTrim,v.Local.sDate,v.DataTable.E(v.Local.iCnt).Tot_Hrs!FieldValString,v.Local.sContent)
+		f.Intrinsic.Control.Next(v.Local.iCnt)
+			
+		'Build date range reference
+		f.Intrinsic.String.Replace(v.DataTable.E(0).report_head_3!FieldValTrim,"From ","",v.Local.sDateRange)
+		f.Intrinsic.String.Replace(v.Local.sDateRange,"/","-",v.Local.sDateRange)
+		f.Intrinsic.String.Replace(v.Local.sDateRange," thru ","_thru_",v.Local.sDateRange)
+		'Build file path
+		F.Intrinsic.String.Build("{0}\Custom\Employee Hours Export\{1}_{2}_{3}_{4}.csv",v.Caller.BusintDir,v.Caller.CompanyCode,v.Local.sUser.Trim,v.Local.sDateRange,v.Ambient.Now.FormatMMDDYYYYHhNnSs,v.Local.sFile)		
+		'save file
+		F.Intrinsic.File.String2File(V.Local.sFile,v.Local.sContent)
+		f.Intrinsic.String.Build("File {0} is generated",v.Local.sFile,v.Local.sRet)
+		f.Intrinsic.UI.Msgbox(v.Local.sRet)
+		
+	f.Intrinsic.Control.Else
+		f.Intrinsic.UI.Msgbox("No record found in Laser_Labor_Perf")
+	f.Intrinsic.Control.EndIf
+
+F.Intrinsic.Control.Catch
+	F.Intrinsic.String.Build("Project: {0}{1}Subroutine: {2}{1}Error Occurred {3} with description {4}{1}GAB Version: {5}}",V.Ambient.ScriptPath,V.Ambient.Newline,V.Ambient.CurrentSubroutine,V.Ambient.ErrorNumber,V.Ambient.ErrorDescription,V.Ambient.GABVersion,V.Local.sError)
+	F.Intrinsic.UI.Msgbox(V.Local.sError)
+	f.Intrinsic.Control.CallSub("Unload")
+F.Intrinsic.Control.EndTry
+Program.Sub.ExportData.End
